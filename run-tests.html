@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Voxel Engine Tests</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        #testResults { margin-top: 20px; padding: 10px; border: 1px solid #ccc; }
+        .log-message { margin: 5px 0; }
+        .log-error { color: red; }
+        .log-success { color: green; }
+    </style>
+</head>
+<body>
+    <h1>Voxel Engine Test Runner</h1>
+    <p>Open the browser's developer console to see detailed test results. Summary below:</p>
+    <button onclick="runAllAvailableTests()">Run All Tests</button>
+    <div id="testResults"></div>
+
+    <script type="module">
+        // This script will orchestrate tests and display summary.
+        // The actual tests are in their own files and run themselves upon import,
+        // or expose functions that we call here.
+
+        // For voxel-data.test.js, it now runs its tests upon import and also puts its
+        // main test function on the window object.
+
+        // We need a way to capture console.log and console.error for display in HTML.
+        const resultsDiv = document.getElementById('testResults');
+        const originalConsoleLog = console.log;
+        const originalConsoleError = console.error;
+
+        function logToPage(message, type = 'log') {
+            const p = document.createElement('p');
+            p.textContent = message;
+            p.classList.add('log-message');
+            if (type === 'error') {
+                p.classList.add('log-error');
+            } else if (type === 'success') { // Custom for assertions
+                 p.classList.add('log-success');
+            }
+            resultsDiv.appendChild(p);
+        }
+
+        console.log = function(message, ...optionalParams) {
+            originalConsoleLog.apply(console, arguments);
+            if (message && message.startsWith && message.startsWith("Assertion Passed:")) {
+                 logToPage(message, 'success');
+            } else {
+                logToPage(message, 'log');
+            }
+        };
+
+        console.error = function(message, ...optionalParams) {
+            originalConsoleError.apply(console, arguments);
+            logToPage(message, 'error');
+        };
+        
+        async function runAllAvailableTests() {
+            resultsDiv.innerHTML = ''; // Clear previous results
+            originalConsoleLog("Starting all tests..."); // Log to actual console
+            logToPage("Starting all tests...");
+
+            // Dynamically import the test file.
+            // The runVoxelDataTests function is now also on window.
+            try {
+                // The new voxel-data.test.js runs its tests on import and 
+                // now exposes window.runVoxelDataColorTests
+                await import('./voxel_engine/voxel-data.test.js'); 
+                
+                // Check if the new test function is available on window (for clarity/future use)
+                if (window.runVoxelDataColorTests) {
+                    logToPage("Voxel data (color) tests executed (on import). Function 'runVoxelDataColorTests' is available.", "log");
+                    // If you wanted to run it again via button, you'd call window.runVoxelDataColorTests() here
+                    // but the current setup runs on import.
+                } else {
+                    logToPage("runVoxelDataColorTests function not found on window. Tests should have run on import.", "log");
+                }
+            } catch (e) {
+                console.error("Failed to load or run voxel-data.test.js:", e);
+            }
+            
+            logToPage("All test executions attempted. Check console for detailed results.", "log");
+            originalConsoleLog("All test executions attempted.");
+        }
+
+        // Make it callable from the button
+        window.runAllAvailableTests = runAllAvailableTests;
+
+        // Optionally run tests on page load
+        // runAllAvailableTests();
+    </script>
+</body>
+</html>
