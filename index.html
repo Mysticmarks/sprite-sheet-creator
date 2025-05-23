@@ -272,8 +272,34 @@
 
         <hr style="margin: 15px 0; border-color: #444;">
         <h4 style="margin-bottom: 10px;">Procedural Generation</h4>
-        <button id="generateTestChunkBtn" style="padding: 8px 12px; margin-bottom:10px; background-color: #17a2b8; color:white; border:none; border-radius:3px; cursor:pointer;">Generate Test Chunk at (0,0,1)</button>
+        <div style="margin-bottom:10px; padding:10px; border: 1px solid #444; border-radius:4px;">
+            <h5 style="margin-top:0; margin-bottom:10px; font-size:13px;">Terrain Noise Configuration (for Y=0 Chunks):</h5>
+            <div style="display:flex; align-items:center; margin-bottom:5px;">
+                <label for="noiseScale" style="font-size:12px; margin-right:5px; width:80px;">Scale:</label>
+                <input type="number" id="noiseScale" value="32" min="1" max="128" step="1" style="width:60px; padding:4px; background-color:#3a3a3a; color:white; border:1px solid #555;">
+                <span style="font-size:11px; color:#888; margin-left:5px;">(e.g., 16-64)</span>
+            </div>
+            <div style="display:flex; align-items:center; margin-bottom:5px;">
+                <label for="noiseAmplitude" style="font-size:12px; margin-right:5px; width:80px;">Amplitude:</label>
+                <input type="number" id="noiseAmplitude" value="4" min="0" max="15" step="1" style="width:60px; padding:4px; background-color:#3a3a3a; color:white; border:1px solid #555;">
+                <span style="font-size:11px; color:#888; margin-left:5px;">(e.g., 0-8)</span>
+            </div>
+            <div style="display:flex; align-items:center; margin-bottom:5px;">
+                <label for="baseHeight" style="font-size:12px; margin-right:5px; width:80px;">Base Y Level:</label>
+                <input type="number" id="baseHeight" value="1" min="0" max="10" step="1" style="width:60px; padding:4px; background-color:#3a3a3a; color:white; border:1px solid #555;">
+                <span style="font-size:11px; color:#888; margin-left:5px;">(min Y, e.g., 0-5)</span>
+            </div>
+        </div>
+        <button id="generateTestChunkBtn" style="padding: 8px 12px; margin-bottom:10px; background-color: #17a2b8; color:white; border:none; border-radius:3px; cursor:pointer;">Generate Test Chunk at (0,0,1) with Config</button>
         <p id="procGenStatus" style="font-size: 12px; margin-top: 0px; color: #aaa; min-height: 1.2em;">&nbsp;</p>
+
+        <hr style="margin: 15px 0; border-color: #444;">
+        <h4 style="margin-bottom: 10px;">World Save/Load (LocalStorage)</h4>
+        <div style="display:flex; gap:10px; margin-bottom:10px;">
+            <button id="saveWorldBtn" style="padding: 8px 12px; background-color: #28a745; color:white; border:none; border-radius:3px; cursor:pointer;">Save World</button>
+            <button id="loadWorldBtn" style="padding: 8px 12px; background-color: #007bff; color:white; border:none; border-radius:3px; cursor:pointer;">Load World</button>
+        </div>
+        <p id="saveLoadStatus" style="font-size: 12px; margin-top: 0px; color: #aaa; min-height: 1.2em;">&nbsp;</p>
     </div>
     
     <div id="statusBar">

@@ -6,38 +6,14 @@ import { createMergedChunkMesh } from './voxel-renderer.js';
 
 let sceneRef;
 let groundPlane; 
-let activeChunkCoords = { x: 0, y: 0, z: 0 }; // Default active chunk for editing
+let activeChunkCoords = { x: 0, y: 0, z: 0 }; 
 
 const MAX_UNDO_STEPS = 20;
 let undoStack = [];
 
-function saveUndoState() {
-    if (undoStack.length >= MAX_UNDO_STEPS) {
-        undoStack.shift(); 
-    }
-    const chunkDataToSave = getChunkDataCopyForUndo(activeChunkCoords.x, activeChunkCoords.y, activeChunkCoords.z);
-    if (chunkDataToSave) {
-        undoStack.push(chunkDataToSave);
-    } else {
-        console.warn("Failed to save undo state: no data for active chunk", activeChunkCoords);
-    }
-    const undoBtn = document.getElementById('undoEditBtn');
-    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
-}
+let highlightMesh; // For visual feedback
 
-export function undoLastEdit() {
-    if (undoStack.length > 0) {
-        const previousState = undoStack.pop();
-        setChunkDataFromCopyForUndo(activeChunkCoords.x, activeChunkCoords.y, activeChunkCoords.z, previousState);
-        regenerateActiveChunkMesh(); 
-        console.log("Undo performed for chunk", activeChunkCoords, ". States left:", undoStack.length);
-        const undoBtn = document.getElementById('undoEditBtn');
-        if (undoBtn) undoBtn.disabled = undoStack.length === 0;
-    } else {
-        console.log("Undo stack empty.");
-    }
-}
-
+// Helper functions (ensure these are correctly defined as per previous steps)
 function worldToVoxelLocalCoords(worldX, worldY, worldZ, chunkCurrentWorldPosition) {
     const localX = worldX - chunkCurrentWorldPosition.x;
     const localY = worldY - chunkCurrentWorldPosition.y;
@@ -49,46 +25,132 @@ function worldToVoxelLocalCoords(worldX, worldY, worldZ, chunkCurrentWorldPositi
     };
 }
 
+function saveUndoState() { 
+    if (undoStack.length >= MAX_UNDO_STEPS) undoStack.shift();
+    const chunkDataToSave = getChunkDataCopyForUndo(activeChunkCoords.x, activeChunkCoords.y, activeChunkCoords.z);
+    if (chunkDataToSave) {
+        undoStack.push(chunkDataToSave);
+    } else {
+        // This might happen if the active chunk doesn't exist in WorldData yet, though editor assumes it does.
+        console.warn("saveUndoState: Could not get chunk data for active chunk", activeChunkCoords);
+    }
+    const undoBtn = document.getElementById('undoEditBtn');
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+}
+
+export function undoLastEdit() { 
+    if (undoStack.length > 0) {
+        const previousState = undoStack.pop();
+        setChunkDataFromCopyForUndo(activeChunkCoords.x, activeChunkCoords.y, activeChunkCoords.z, previousState);
+        regenerateActiveChunkMesh(); 
+        const undoBtn = document.getElementById('undoEditBtn');
+        if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    }
+}
+
+function regenerateActiveChunkMesh() { 
+    if (window.updateWorldView) {
+        window.updateWorldView(); 
+    } else {
+        console.error("regenerateActiveChunkMesh: window.updateWorldView is not available!");
+    }
+    const undoBtn = document.getElementById('undoEditBtn');
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0; // Keep undo button state updated
+}
+
+
 export function initVoxelEditor(babylonScene) {
     sceneRef = babylonScene;
     
-    // window.theVoxelChunkOriginalPosition is world pos of chunk (0,0,0)
     const baseChunkWorldPos = window.theVoxelChunkOriginalPosition || new BABYLON.Vector3(0,0,0);
-    
-    // Ground plane is always relative to chunk (0,0,0)'s base for now
     const groundYPosition = baseChunkWorldPos.y - 0.5; 
     const groundXPosition = baseChunkWorldPos.x + CHUNK_SIZE / 2 - 0.5;
     const groundZPosition = baseChunkWorldPos.z + CHUNK_SIZE / 2 - 0.5;
 
-    groundPlane = BABYLON.MeshBuilder.CreateGround("voxelEditGround", { width: CHUNK_SIZE * 3, height: CHUNK_SIZE * 3 }, sceneRef); // Larger ground
-    groundPlane.position = new BABYLON.Vector3(groundXPosition, groundYPosition, groundZPosition); // Centered with chunk 0,0,0
+    groundPlane = BABYLON.MeshBuilder.CreateGround("voxelEditGround", { width: CHUNK_SIZE * 3, height: CHUNK_SIZE * 3 }, sceneRef);
+    groundPlane.position = new BABYLON.Vector3(groundXPosition, groundYPosition, groundZPosition);
     groundPlane.visibility = 0.0; 
     groundPlane.isPickable = true;
-    groundPlane.enablePointerMoveEvents = false;
+    // groundPlane.enablePointerMoveEvents = false; // Not needed if scene.onPointerMove is used with predicate
+
+    // Create highlight mesh
+    highlightMesh = BABYLON.MeshBuilder.CreateBox("highlightBox", { size: 1.01 }, sceneRef);
+    const highlightMaterial = new BABYLON.StandardMaterial("highlightMat", sceneRef);
+    highlightMaterial.emissiveColor = BABYLON.Color3.Yellow();
+    highlightMaterial.wireframe = true;
+    highlightMaterial.alpha = 0.5; // Wireframe can still have alpha to be less obtrusive
+    highlightMesh.material = highlightMaterial;
+    highlightMesh.isPickable = false;
+    highlightMesh.isVisible = false;
 
     const undoBtn = document.getElementById('undoEditBtn');
     if (undoBtn) undoBtn.disabled = undoStack.length === 0;
 
-    sceneRef.onPointerDown = (evt, pickInfo) => {
-        if (!pickInfo.hit || !pickInfo.pickedPoint) return;
+    sceneRef.onPointerMove = (evt, pickInfo) => { // evt and pickInfo are from the event, not mandatory to use if doing fresh pick
+        pickInfo = sceneRef.pick(sceneRef.pointerX, sceneRef.pointerY, (mesh) => mesh.isPickable && (mesh === window.theVoxelChunk || mesh === groundPlane));
 
-        let clickedMesh = pickInfo.pickedMesh;
-        let isRightClick = evt.button === 2;
+        if (pickInfo && pickInfo.hit && pickInfo.pickedPoint) {
+            let normal = pickInfo.getNormal(true, false);
+            if (!normal) {
+                highlightMesh.isVisible = false;
+                return;
+            }
+            
+            const activeChunkWorldOrigin = (window.theVoxelChunkOriginalPosition || new BABYLON.Vector3(0,0,0)).add(
+                new BABYLON.Vector3(activeChunkCoords.x * CHUNK_SIZE, activeChunkCoords.y * CHUNK_SIZE, activeChunkCoords.z * CHUNK_SIZE)
+            );
+
+            let targetLocalCoords;
+            // If the hit is on the main voxel chunk, highlight the cell of the hit block (for removal)
+            if (pickInfo.pickedMesh === window.theVoxelChunk) {
+                let pointInsideBlock = pickInfo.pickedPoint.subtract(normal.scale(0.1)); // Move into the block
+                targetLocalCoords = worldToVoxelLocalCoords(pointInsideBlock.x, pointInsideBlock.y, pointInsideBlock.z, activeChunkWorldOrigin);
+            } else if (pickInfo.pickedMesh === groundPlane) { // If hit is on ground, highlight cell for placement
+                let pointForNewBlock = pickInfo.pickedPoint.add(normal.scale(0.1)); // Move into the new cell
+                targetLocalCoords = worldToVoxelLocalCoords(pointForNewBlock.x, pointForNewBlock.y, pointForNewBlock.z, activeChunkWorldOrigin);
+            } else {
+                highlightMesh.isVisible = false;
+                return;
+            }
+            
+            // Check bounds for the calculated local coordinates
+            if (targetLocalCoords && 
+                targetLocalCoords.x >= 0 && targetLocalCoords.x < CHUNK_SIZE &&
+                targetLocalCoords.y >= 0 && targetLocalCoords.y < CHUNK_SIZE &&
+                targetLocalCoords.z >= 0 && targetLocalCoords.z < CHUNK_SIZE) {
+                
+                highlightMesh.position.set(
+                    activeChunkWorldOrigin.x + targetLocalCoords.x + 0.5,
+                    activeChunkWorldOrigin.y + targetLocalCoords.y + 0.5,
+                    activeChunkWorldOrigin.z + targetLocalCoords.z + 0.5
+                );
+                highlightMesh.isVisible = true;
+            } else {
+                highlightMesh.isVisible = false;
+            }
+        } else {
+            highlightMesh.isVisible = false;
+        }
+    }; // End of onPointerMove
+
+    sceneRef.onPointerDown = (evt, pickInfoOnDown) => { 
+        if(highlightMesh) highlightMesh.isVisible = false; 
         
-        // Calculate the world origin of the currently active editing chunk
-        let activeChunkWorldOrigin = baseChunkWorldPos.add(
+        pickInfoOnDown = sceneRef.pick(sceneRef.pointerX, sceneRef.pointerY, (mesh) => mesh.isPickable && (mesh === window.theVoxelChunk || mesh === groundPlane));
+
+        if (!pickInfoOnDown || !pickInfoOnDown.hit || !pickInfoOnDown.pickedPoint) return;
+
+        let clickedMesh = pickInfoOnDown.pickedMesh;
+        let isRightClick = evt.button === 2;
+        const activeChunkWorldOrigin = (window.theVoxelChunkOriginalPosition || new BABYLON.Vector3(0,0,0)).add(
             new BABYLON.Vector3(activeChunkCoords.x * CHUNK_SIZE, activeChunkCoords.y * CHUNK_SIZE, activeChunkCoords.z * CHUNK_SIZE)
         );
 
-        // For now, editing is only on the displayed 'window.theVoxelChunk' or the ground plane.
-        // We assume window.theVoxelChunk IS the mesh for activeChunkCoords.
-        if (clickedMesh !== window.theVoxelChunk && clickedMesh !== groundPlane) {
-            return; 
-        }
-
         if (isRightClick) { 
             if (clickedMesh === window.theVoxelChunk) {
-                let pointInside = pickInfo.pickedPoint.subtract(pickInfo.getNormal(true, false).scale(0.1));
+                let normal = pickInfoOnDown.getNormal(true, false); 
+                if (!normal) return;
+                let pointInside = pickInfoOnDown.pickedPoint.subtract(normal.scale(0.1));
                 const localVoxelCoords = worldToVoxelLocalCoords(pointInside.x, pointInside.y, pointInside.z, activeChunkWorldOrigin);
                 
                 if (getBlockType(activeChunkCoords.x, activeChunkCoords.y, activeChunkCoords.z, localVoxelCoords.x, localVoxelCoords.y, localVoxelCoords.z) !== 0) {
@@ -98,11 +160,10 @@ export function initVoxelEditor(babylonScene) {
                 }
             }
         } else { // Add Block
-            let normal = pickInfo.getNormal(true, false);
+            let normal = pickInfoOnDown.getNormal(true, false);
             if (!normal) return;
 
-            let pointForNewBlock = pickInfo.pickedPoint.add(normal.scale(0.1));
-            // If clicking ground, new block is in activeChunkCoords. If clicking existing chunk, also in activeChunkCoords.
+            let pointForNewBlock = pickInfoOnDown.pickedPoint.add(normal.scale(0.1));
             const localPositionToAdd = worldToVoxelLocalCoords(pointForNewBlock.x, pointForNewBlock.y, pointForNewBlock.z, activeChunkWorldOrigin);
             
             if (localPositionToAdd.x >= 0 && localPositionToAdd.x < CHUNK_SIZE &&
@@ -117,28 +178,5 @@ export function initVoxelEditor(babylonScene) {
                 }
             }
         }
-    };
-}
-
-function regenerateActiveChunkMesh() { 
-    const currentMaterial = window.theVoxelChunk ? window.theVoxelChunk.material : null;
-    const currentMaterialName = (currentMaterial && currentMaterial.name === "voxelTextureMaterial") ? "voxelTextureMaterial" : null;
-
-    if (window.theVoxelChunk) {
-        window.theVoxelChunk.dispose();
-    }
-    
-    window.theVoxelChunk = createMergedChunkMesh(sceneRef, activeChunkCoords.x, activeChunkCoords.y, activeChunkCoords.z); 
-    
-    if (window.theVoxelChunk) {
-        const baseChunkWorldPos = window.theVoxelChunkOriginalPosition || new BABYLON.Vector3(0,0,0);
-        let newPosition = baseChunkWorldPos.add(
-            new BABYLON.Vector3(activeChunkCoords.x * CHUNK_SIZE, activeChunkCoords.y * CHUNK_SIZE, activeChunkCoords.z * CHUNK_SIZE)
-        );
-        window.theVoxelChunk.position = newPosition;
-
-        if (currentMaterialName === "voxelTextureMaterial" && window.currentAppliedVoxelMaterial) {
-             window.theVoxelChunk.material = window.currentAppliedVoxelMaterial;
-        }
-    }
-}
+    }; // End of onPointerDown
+} // End of initVoxelEditor

@@ -4,6 +4,13 @@ import { generateImageFromPrompt } from '../ai_components/llm-service.js';
 import { undoLastEdit } from '../voxel_engine/voxel-editor.js'; 
 import { generateSimpleChunkData } from '../procedural_generator/basic-generator.js';
 import * as WorldData from '../world_data.js';
+import { CHUNK_SIZE } from '../voxel_engine/voxel-data-declarations.js'; 
+
+// Ensure global initializations for texture caches are at the top
+if (typeof window.blockTypeTextureURLs === 'undefined') window.blockTypeTextureURLs = {};
+if (typeof window.blockTypeMaterialsCache === 'undefined') window.blockTypeMaterialsCache = {};
+
+const VOXEL_WORLD_LOCAL_STORAGE_KEY = 'myVoxelWorldData'; // Consistent key
 
 document.addEventListener('DOMContentLoaded', () => {
     // LLM API Key Configuration Elements
@@ -21,7 +28,6 @@ document.addEventListener('DOMContentLoaded', () => {
             apiKeyStatus.textContent = 'API Key not set for this session.';
         }
     } else {
-        console.warn("API Key input or status element not found initially for admin.js.");
         if(apiKeyStatus) apiKeyStatus.textContent = "API Key UI failed to load.";
     }
 
@@ -32,24 +38,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                     sessionStorage.setItem(LLM_API_KEY_SESSION_STORAGE_KEY, apiKeyVal);
                     apiKeyStatus.textContent = 'API Key saved for this session.';
-                    console.log("LLM API Key saved to sessionStorage.");
                 } catch (e) {
                     apiKeyStatus.textContent = 'Error saving API Key (storage may be full or disabled).';
-                    console.error("Error saving API Key to sessionStorage:", e);
                 }
             } else {
                 try {
                     sessionStorage.removeItem(LLM_API_KEY_SESSION_STORAGE_KEY);
                     apiKeyStatus.textContent = 'API Key cleared from this session.';
-                    console.log("LLM API Key cleared from sessionStorage.");
                 } catch (e) {
                     apiKeyStatus.textContent = 'Error clearing API Key.';
-                    console.error("Error clearing API Key from sessionStorage:", e);
                 }
             }
         });
-    } else {
-        console.warn("LLM API Key UI elements (button, input, or status) not fully found for event listener setup in admin.js.");
     }
 
     // Texture Generation Elements
@@ -61,70 +61,46 @@ document.addEventListener('DOMContentLoaded', () => {
     if (generateTextureButton && texturePromptInput && texturePreviewImage && textureAdminStatus) {
         generateTextureButton.addEventListener('click', async () => {
             const prompt = texturePromptInput.value;
-
-            if (!prompt.trim()) {
-                textureAdminStatus.textContent = 'Please enter a prompt for texture generation.';
-                texturePreviewImage.src = "https://via.placeholder.com/128/FFA500/000000?Text=Enter+Prompt";
+            const selectedType = window.currentSelectedBlockType; 
+            if (!selectedType && selectedType !== 0) { 
+                textureAdminStatus.textContent = 'Please select a block type first.';
                 return;
             }
-            
             const apiKeyIsSet = sessionStorage.getItem(LLM_API_KEY_SESSION_STORAGE_KEY);
             if (!apiKeyIsSet) {
-                textureAdminStatus.textContent = 'API Key not set. Please configure it in LLM Configuration section.';
-                texturePreviewImage.src = "https://via.placeholder.com/128/FF0000/FFFFFF?Text=No+API+Key";
+                textureAdminStatus.textContent = 'API Key not set. Please configure it in LLM Configuration.';
                 return;
             }
-
-            textureAdminStatus.textContent = 'Generating texture via API...';
+            if (!prompt.trim()) {
+                textureAdminStatus.textContent = 'Please enter a prompt for texture generation.';
+                return;
+            }
+            textureAdminStatus.textContent = `Generating texture for Block Type ${selectedType} via API...`;
             texturePreviewImage.src = "https://via.placeholder.com/128/333333/FFFFFF?Text=Loading+API..."; 
-
             try {
                 const imageUrl = await generateImageFromPrompt(prompt); 
                 texturePreviewImage.src = imageUrl; 
-                textureAdminStatus.textContent = 'Preview generated. Applying to model...';
-
-                if (window.theVoxelChunk && window.scene) {
-                    if (window.theVoxelChunk.material && window.theVoxelChunk.material.name === "voxelTextureMaterial") {
-                        if (window.theVoxelChunk.material.diffuseTexture) {
-                            window.theVoxelChunk.material.diffuseTexture.dispose();
-                        }
-                        window.theVoxelChunk.material.dispose();
-                    }
-                    window.currentAppliedVoxelMaterial = null; 
-
-                    const voxelMaterial = new BABYLON.StandardMaterial("voxelTextureMaterial", window.scene);
-                    
-                    const texture = new BABYLON.Texture(imageUrl, window.scene, 
-                        false, true, BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
-                        () => { 
-                            voxelMaterial.diffuseTexture = texture;
-                            window.theVoxelChunk.material = voxelMaterial;
-                            window.currentAppliedVoxelMaterial = voxelMaterial; 
-                            textureAdminStatus.textContent = 'Texture applied! (Note: OpenAI URLs are temporary)';
-                            console.log("Texture successfully loaded and applied from OpenAI URL.");
-                            console.warn("Note: OpenAI image URLs are temporary and may expire after about an hour. For persistent storage, download the image and host it, or convert to DataURL if appropriate.");
-                        },
-                        (message, exception) => { 
-                            console.error("Failed to load texture from OpenAI URL:", imageUrl, "Error message:", message, exception);
-                            textureAdminStatus.textContent = 'Error: Failed to load texture image from URL. The URL might be invalid, expired, or blocked by browser security (CORS).';
-                        }
-                    );
-                } else {
-                    textureAdminStatus.textContent = 'Voxel model (window.theVoxelChunk) or scene (window.scene) not found to apply texture.';
-                    console.error('window.theVoxelChunk or window.scene is not available for texture application.');
+                const oldMaterialCacheKey = Object.keys(window.blockTypeMaterialsCache).find(key => key.startsWith(`type_${selectedType}_tex_`));
+                if (oldMaterialCacheKey && window.blockTypeMaterialsCache[oldMaterialCacheKey]) {
+                    window.blockTypeMaterialsCache[oldMaterialCacheKey].dispose(); 
+                    delete window.blockTypeMaterialsCache[oldMaterialCacheKey];
                 }
-
+                window.blockTypeTextureURLs[selectedType] = imageUrl;
+                textureAdminStatus.textContent = `Texture URL for Block Type ${selectedType} set. Updating world...`;
+                if (window.updateWorldView) {
+                    window.updateWorldView(); 
+                    textureAdminStatus.textContent += ` World updated. (OpenAI URLs are temporary)`;
+                } else {
+                    textureAdminStatus.textContent += " View update function not found.";
+                }
             } catch (error) {
-                console.error('Texture generation API call failed overall:', error);
-                textureAdminStatus.textContent = `Error: ${error.message || 'Failed to generate texture via API.'}`;
+                textureAdminStatus.textContent = `Error (Type ${selectedType}): ${error.message || 'Failed to generate texture.'}`;
                 texturePreviewImage.src = "https://via.placeholder.com/128/FF0000/FFFFFF?Text=API+Error";
             }
         });
-    } else {
-        console.warn('One or more texture generation UI elements are missing in admin.js for setup.');
     }
     
-    // GLB Export Elements
+    // GLB Export Elements & Status
     const exportButton = document.getElementById('exportGlbBtn');
     const glbExportAdminStatus = document.getElementById('adminStatus');
 
@@ -136,16 +112,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     await window.triggerVoxelExport();
                 } catch (error) {
                     glbExportAdminStatus.textContent = 'Error during GLB export: ' + error.message;
-                    console.error('Export trigger failed:', error);
                 }
             } else {
                 glbExportAdminStatus.textContent = 'Export function (window.triggerVoxelExport) not ready.';
-                console.error('window.triggerVoxelExport is not defined.');
             }
         });
-    } else {
-        if (!exportButton) console.warn('Export button (exportGlbBtn) not found in admin panel.');
-        if (!glbExportAdminStatus) console.warn('Admin status element (adminStatus) for GLB export not found.');
     }
 
     // Block Type Selection UI
@@ -154,29 +125,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const selectedBlockStatus = document.getElementById('selectedBlockStatus');
 
     function updateSelectedButtonVisual(selectedBtn) {
-        blockTypeButtons.forEach(btn => {
-            btn.classList.remove('selected');
-        });
-        if (selectedBtn) {
-            selectedBtn.classList.add('selected');
-        }
+        blockTypeButtons.forEach(btn => btn.classList.remove('selected'));
+        if (selectedBtn) selectedBtn.classList.add('selected');
     }
     
     if (blockTypeButtons.length > 0 && selectedBlockStatus) {
-        let initialButton = document.querySelector('.blockTypeBtn[data-block-type="' + window.currentSelectedBlockType + '"]');
-        if (!initialButton && blockTypeButtons.length > 0) { 
-             initialButton = blockTypeButtons[0]; 
-             window.currentSelectedBlockType = parseInt(initialButton.dataset.blockType);
-        }
-
+        let initialButton = document.querySelector('.blockTypeBtn[data-block-type="' + window.currentSelectedBlockType + '"]') || blockTypeButtons[0];
         if (initialButton) {
-             updateSelectedButtonVisual(initialButton);
-             const initialColorName = initialButton.textContent.split('(')[1]?.replace(')','').trim() || 'Unknown';
-             selectedBlockStatus.textContent = `Selected: Type ${window.currentSelectedBlockType} (${initialColorName})`;
+            window.currentSelectedBlockType = parseInt(initialButton.dataset.blockType);
+            updateSelectedButtonVisual(initialButton);
+            const initialColorName = initialButton.textContent.split('(')[1]?.replace(')','').trim() || 'Unknown';
+            selectedBlockStatus.textContent = `Selected: Type ${window.currentSelectedBlockType} (${initialColorName})`;
         } else {
-            selectedBlockStatus.textContent = 'No block types available or configured.';
+             selectedBlockStatus.textContent = 'No block types available.';
         }
-
         blockTypeButtons.forEach(button => {
             button.addEventListener('click', (event) => {
                 const clickedButton = event.currentTarget;
@@ -186,52 +148,127 @@ document.addEventListener('DOMContentLoaded', () => {
                 selectedBlockStatus.textContent = `Selected: Type ${window.currentSelectedBlockType} (${colorName})`;
             });
         });
-    } else {
-        console.warn("Block type selection UI elements not found or incomplete in admin.js.");
-        if(selectedBlockStatus) selectedBlockStatus.textContent = "Block selection UI failed to load.";
     }
 
     // Undo Button
     const undoButton = document.getElementById('undoEditBtn');
     if (undoButton) {
-        undoButton.addEventListener('click', () => {
-            undoLastEdit(); 
-        });
-    } else {
-        console.warn("Undo button (undoEditBtn) not found in admin.js.");
+        undoButton.addEventListener('click', () => undoLastEdit());
     }
 
-    // Procedural Generation Button
+    // Procedural Generation Button & Config Inputs
     const generateTestChunkButton = document.getElementById('generateTestChunkBtn');
     const procGenStatus = document.getElementById('procGenStatus');
+    const noiseScaleInput = document.getElementById('noiseScale');
+    const noiseAmplitudeInput = document.getElementById('noiseAmplitude');
+    const baseHeightInput = document.getElementById('baseHeight');
 
-    if (generateTestChunkButton && procGenStatus) {
+    if (generateTestChunkButton && procGenStatus && noiseScaleInput && noiseAmplitudeInput && baseHeightInput) {
         generateTestChunkButton.addEventListener('click', () => {
-            const testChunkX = 0;
-            const testChunkY = 0; 
-            const testChunkZ = 1; 
-
-            procGenStatus.textContent = `Generating chunk data for (${testChunkX},${testChunkY},${testChunkZ})...`;
+            const testChunkX = 0, testChunkY = 0, testChunkZ = 1; 
+            let noiseConfig = {
+                noiseScale: parseFloat(noiseScaleInput.value),
+                noiseAmplitude: parseFloat(noiseAmplitudeInput.value),
+                baseHeight: parseInt(baseHeightInput.value)
+            };
+            noiseConfig.noiseScale = Math.max(1, Math.min(128, isNaN(noiseConfig.noiseScale) ? 32 : noiseConfig.noiseScale));
+            noiseScaleInput.value = noiseConfig.noiseScale;
+            noiseConfig.baseHeight = Math.max(0, Math.min(10, isNaN(noiseConfig.baseHeight) ? 1 : noiseConfig.baseHeight));
+            baseHeightInput.value = noiseConfig.baseHeight;
+            let maxPossibleAmplitude = CHUNK_SIZE - 1 - noiseConfig.baseHeight;
+            noiseConfig.noiseAmplitude = Math.max(0, Math.min(maxPossibleAmplitude, isNaN(noiseConfig.noiseAmplitude) ? 4 : noiseConfig.noiseAmplitude));
+            noiseConfig.noiseAmplitude = Math.min(15, noiseConfig.noiseAmplitude); 
+            noiseAmplitudeInput.value = noiseConfig.noiseAmplitude;
+            procGenStatus.textContent = `Generating chunk (${testChunkX},${testChunkY},${testChunkZ}) with config...`;
             try {
-                const newChunkDataArray = generateSimpleChunkData(testChunkX, testChunkY, testChunkZ);
+                const newChunkDataArray = generateSimpleChunkData(testChunkX, testChunkY, testChunkZ, noiseConfig);
                 WorldData.setChunkData(testChunkX, testChunkY, testChunkZ, newChunkDataArray);
                 procGenStatus.textContent = `Chunk (${testChunkX},${testChunkY},${testChunkZ}) data stored. `;
-                
                 if (window.updateWorldView) {
                     window.updateWorldView(); 
                     procGenStatus.textContent += "World view updated.";
-                    console.log(`Chunk (${testChunkX},${testChunkY},${testChunkZ}) generated and view updated.`);
                 } else {
                     procGenStatus.textContent += "View update function not found.";
-                    console.error("window.updateWorldView is not defined after generating chunk.");
                 }
             } catch (error) {
                 procGenStatus.textContent = `Error generating chunk: ${error.message}`;
-                console.error("Error generating test chunk:", error);
+            }
+        });
+    }
+
+    // World Save/Load
+    const saveWorldButton = document.getElementById('saveWorldBtn');
+    const loadWorldButton = document.getElementById('loadWorldBtn');
+    const saveLoadStatus = document.getElementById('saveLoadStatus');
+
+    if (saveWorldButton && loadWorldButton && saveLoadStatus) {
+        saveWorldButton.addEventListener('click', () => {
+            saveLoadStatus.textContent = "Saving world...";
+            try {
+                const worldChunksToSave = {};
+                const allCoords = WorldData.getAllChunkCoordinates();
+                allCoords.forEach(coords => {
+                    const chunkKey = `${coords.x},${coords.y},${coords.z}`;
+                    worldChunksToSave[chunkKey] = WorldData.getChunkData(coords.x, coords.y, coords.z);
+                });
+                const dataToStore = {
+                    worldChunks: worldChunksToSave,
+                    textureAssignments: window.blockTypeTextureURLs || {}
+                };
+                localStorage.setItem(VOXEL_WORLD_LOCAL_STORAGE_KEY, JSON.stringify(dataToStore));
+                saveLoadStatus.textContent = "World saved to LocalStorage!";
+                console.log("World saved to LocalStorage:", dataToStore);
+            } catch (error) {
+                saveLoadStatus.textContent = `Error saving world: ${error.message}`;
+                console.error("Error saving world to LocalStorage:", error);
+            }
+        });
+
+        loadWorldButton.addEventListener('click', () => {
+            saveLoadStatus.textContent = "Loading world...";
+            const savedDataString = localStorage.getItem(VOXEL_WORLD_LOCAL_STORAGE_KEY);
+            if (!savedDataString) {
+                saveLoadStatus.textContent = "No saved world data found in LocalStorage.";
+                return;
+            }
+            try {
+                const loadedData = JSON.parse(savedDataString);
+                if (!loadedData || typeof loadedData.worldChunks === 'undefined') {
+                    throw new Error("Invalid or incomplete saved data format.");
+                }
+                WorldData.clearAllChunks(); 
+                if (window.blockTypeMaterialsCache) { 
+                    Object.values(window.blockTypeMaterialsCache).forEach(mat => {
+                        if(mat && typeof mat.dispose === 'function') mat.dispose();
+                    });
+                }
+                window.blockTypeTextureURLs = loadedData.textureAssignments || {};
+                window.blockTypeMaterialsCache = {}; 
+                for (const key in loadedData.worldChunks) {
+                    if (Object.hasOwnProperty.call(loadedData.worldChunks, key)) {
+                        const coords = key.split(',').map(Number);
+                        if (loadedData.worldChunks[key]) { 
+                           WorldData.setChunkData(coords[0], coords[1], coords[2], loadedData.worldChunks[key]);
+                        } else {
+                           console.warn(`Null or undefined chunk data found in localStorage for key ${key}`);
+                        }
+                    }
+                }
+                if (window.updateWorldView) {
+                    window.updateWorldView(); 
+                    saveLoadStatus.textContent = "World loaded from LocalStorage and view updated!";
+                } else {
+                    saveLoadStatus.textContent = "World data loaded, but view updater (window.updateWorldView) not found.";
+                }
+                console.log("World loaded from LocalStorage:", loadedData);
+            } catch (error) {
+                saveLoadStatus.textContent = `Error loading world: ${error.message}`;
+                console.error("Error loading world from LocalStorage:", error);
+                if(window.resetInitialChunk) window.resetInitialChunk(); // Attempt to reset to default
+                else if(window.updateWorldView) window.updateWorldView(); // Fallback to just updating view if reset not there
             }
         });
     } else {
-        console.warn("Procedural generation UI elements (button or status) not found in admin.js.");
-        if(procGenStatus) procGenStatus.textContent = "ProcGen UI failed to load.";
+        if(saveLoadStatus) saveLoadStatus.textContent = "Save/Load UI failed to load.";
     }
 });
